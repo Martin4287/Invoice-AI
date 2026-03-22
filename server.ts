@@ -3,11 +3,15 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { google } from "googleapis";
 import dotenv from "dotenv";
+import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const DRIVE_API_KEY = process.env.DRIVE_API_KEY || "secret_key_123"; // Simple key for script auth
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -117,6 +121,88 @@ app.post("/api/sheets/append", async (req, res) => {
       error: googleError,
       details: error.response?.data?.error || null
     });
+  }
+});
+
+// New endpoint for Google Apps Script integration
+app.post("/api/drive/process", async (req, res) => {
+  const { apiKey, base64Image, fileName } = req.body;
+
+  // 1. Basic Auth
+  if (apiKey !== DRIVE_API_KEY) {
+    return res.status(401).json({ error: "No autorizado" });
+  }
+
+  if (!base64Image) {
+    return res.status(400).json({ error: "Falta la imagen" });
+  }
+
+  try {
+    const model = "gemini-3-flash-preview";
+    const prompt = `
+      Analyze the provided invoice image. 
+      Extract every line item from the invoice into a structured list.
+      
+      Fields to extract for each item:
+      - date: The date of the invoice (YYYY-MM-DD).
+      - vendorName: The legal name of the provider.
+      - invoiceNumber: The unique identifier of the invoice.
+      - quantity: The numeric quantity of the item.
+      - unitOfMeasure: e.g., 'unidades', 'kg', 'litros'. Use 'No disponible' if not found.
+      - itemDetail: Full description of the product or service.
+      - unitPriceWithoutVat: The price per unit EXCLUDING VAT.
+      - totalPriceWithoutVat: The total price for this line item EXCLUDING VAT.
+      
+      If any field is missing, use "No disponible".
+      Ensure mathematical consistency: quantity * unitPriceWithoutVat should equal totalPriceWithoutVat.
+    `;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64Image
+            }
+          }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  date: { type: Type.STRING },
+                  vendorName: { type: Type.STRING },
+                  invoiceNumber: { type: Type.STRING },
+                  quantity: { type: Type.STRING },
+                  unitOfMeasure: { type: Type.STRING },
+                  itemDetail: { type: Type.STRING },
+                  unitPriceWithoutVat: { type: Type.STRING },
+                  totalPriceWithoutVat: { type: Type.STRING },
+                },
+                required: ["date", "vendorName", "invoiceNumber", "quantity", "unitOfMeasure", "itemDetail", "unitPriceWithoutVat", "totalPriceWithoutVat"]
+              }
+            }
+          },
+          required: ["items"]
+        }
+      }
+    });
+
+    const result = JSON.parse(response.text);
+    res.json(result);
+  } catch (error: any) {
+    console.error("Drive Processing Error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
