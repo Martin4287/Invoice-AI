@@ -1,0 +1,5 @@
+{
+  "name": "Invoice AI Processor",
+  "description": "Extract structured data from invoices using Gemini AI and sync them to Google Sheets with automatic VAT calculation and duplicate detection.",
+  "requestFramePermissions": []
+}
