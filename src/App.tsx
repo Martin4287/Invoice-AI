@@ -123,11 +123,14 @@ export default function App() {
           const picker = new window.google.picker.PickerBuilder()
             .enableFeature(window.google.picker.Feature.NAV_HIDDEN)
             .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+            .enableFeature(window.google.picker.Feature.SUPPORT_DRIVES) // Support Shared Drives
             .setAppId(config.clientId)
             .setOAuthToken(googleTokens.access_token)
             .addView(view)
             .setDeveloperKey(config.developerKey)
+            .setOrigin(window.location.origin)
             .setCallback(async (data: any) => {
+              console.log("Picker Event:", data); // Helpful for debugging blank screens
               if (data.action === window.google.picker.Action.PICKED) {
                 const docs = data.docs;
                 for (const doc of docs) {
