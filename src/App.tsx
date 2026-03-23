@@ -19,6 +19,13 @@ import { processInvoices, InvoiceItem, GeminiResponse } from './services/gemini'
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+declare global {
+  interface Window {
+    gapi: any;
+    google: any;
+  }
+}
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -34,8 +41,12 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [googleTokens, setGoogleTokens] = useState<any>(null);
+  const [config, setConfig] = useState<{ clientId: string, developerKey: string } | null>(null);
+  const [isDriveLoading, setIsDriveLoading] = useState(false);
 
   useEffect(() => {
+    fetch('/api/config').then(res => res.json()).then(setConfig);
+    
     const savedTokens = localStorage.getItem('google_tokens');
     if (savedTokens) {
       setGoogleTokens(JSON.parse(savedTokens));
@@ -92,6 +103,75 @@ export default function App() {
     const { url } = await response.json();
     window.open(url, 'google_oauth', 'width=600,height=700');
   };
+
+  const handleSelectFromDrive = useCallback(() => {
+    if (!googleTokens || !config) return;
+
+    if (!config.developerKey || config.developerKey === 'secret_key_123' || config.developerKey === '') {
+      alert("Falta configurar la 'GOOGLE_API_KEY' en los Secrets de la aplicación para usar Google Drive.");
+      return;
+    }
+
+    setIsDriveLoading(true);
+
+    const loadPicker = () => {
+      window.gapi.load('picker', {
+        callback: () => {
+          const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS);
+          view.setMimeTypes('image/jpeg,image/png,application/pdf');
+          
+          const picker = new window.google.picker.PickerBuilder()
+            .enableFeature(window.google.picker.Feature.NAV_HIDDEN)
+            .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
+            .setAppId(config.clientId)
+            .setOAuthToken(googleTokens.access_token)
+            .addView(view)
+            .setDeveloperKey(config.developerKey)
+            .setCallback(async (data: any) => {
+              if (data.action === window.google.picker.Action.PICKED) {
+                const docs = data.docs;
+                for (const doc of docs) {
+                  try {
+                    const fileId = doc.id;
+                    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                      headers: {
+                        'Authorization': `Bearer ${googleTokens.access_token}`
+                      }
+                    });
+                    
+                    const blob = await response.blob();
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      const base64 = reader.result as string;
+                      setPreviews(prev => [...prev, base64]);
+                      // We don't have the "File" object but we have the preview
+                      // The processInvoices function uses previews (base64)
+                    };
+                    reader.readAsDataURL(blob);
+                  } catch (err) {
+                    console.error("Error fetching file from Drive:", err);
+                  }
+                }
+              }
+              if (data.action === window.google.picker.Action.CANCEL || data.action === window.google.picker.Action.PICKED) {
+                setIsDriveLoading(false);
+              }
+            })
+            .build();
+          picker.setVisible(true);
+        }
+      });
+    };
+
+    if (!window.gapi) {
+      const script = document.createElement('script');
+      script.src = 'https://apis.google.com/js/api.js';
+      script.onload = loadPicker;
+      document.body.appendChild(script);
+    } else {
+      loadPicker();
+    }
+  }, [googleTokens, config]);
 
   const handleSaveToSheets = async () => {
     if (!googleTokens || !result) return;
@@ -234,9 +314,20 @@ export default function App() {
                 Conectar Google
               </button>
             ) : (
-              <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-full border border-emerald-100 shadow-sm shadow-emerald-50">
-                <CheckCircle2 size={16} className="text-emerald-500" />
-                <span className="text-sm font-bold">Google Conectado</span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-full border border-emerald-100 shadow-sm shadow-emerald-50">
+                  <CheckCircle2 size={16} className="text-emerald-500" />
+                  <span className="text-sm font-bold">Conectado</span>
+                </div>
+                <button 
+                  onClick={() => {
+                    setGoogleTokens(null);
+                    localStorage.removeItem('google_tokens');
+                  }}
+                  className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  Desconectar
+                </button>
               </div>
             )}
           </div>
@@ -277,6 +368,17 @@ export default function App() {
                   </div>
                   <input type="file" multiple className="hidden" onChange={handleFileChange} accept="image/*" />
                 </label>
+
+                {googleTokens && (
+                  <button
+                    onClick={handleSelectFromDrive}
+                    disabled={isDriveLoading}
+                    className="w-full py-3 px-4 border-2 border-indigo-100 rounded-2xl text-indigo-600 font-bold hover:bg-indigo-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    {isDriveLoading ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />}
+                    Seleccionar de Google Drive
+                  </button>
+                )}
 
                 <AnimatePresence>
                   {previews.length > 0 && (
